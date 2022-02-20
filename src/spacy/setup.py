@@ -33,6 +33,8 @@ setuptools.setup(
         "forte==0.1.2",
         f"spacy{supported_spacey_version}",
         "scispacy==0.3.0",
+        "negspacy==0.1.9",#; spacy<='2.3.5'",
+        #"negspacy==1.0.1; spacy>'2.3.5'",
     ],
     extra_requires={
         "cuda": [f"spacy[cuda]{supported_spacey_version}"],

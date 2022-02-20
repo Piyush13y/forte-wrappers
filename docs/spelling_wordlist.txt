@@ -148,6 +148,8 @@ GPT2
 Faiss
 NLTK
 ScispaCy
+negspaCy
+NegspaCy
 UMLS
 umls
 lemmatization

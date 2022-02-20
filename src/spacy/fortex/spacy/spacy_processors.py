@@ -13,6 +13,7 @@
 # limitations under the License.
 from copy import deepcopy
 from typing import Optional, Dict, Set, List, Any, Iterator
+from h11 import Data
 
 import spacy
 from packaging import version
@@ -27,8 +28,15 @@ from forte.data.batchers import ProcessingBatcher, FixedSizeDataPackBatcher
 from forte.data.data_pack import DataPack
 from forte.data.ontology import Annotation
 from forte.processors.base import PackProcessor, FixedSizeBatchProcessor
-from ft.onto.base_ontology import EntityMention, Sentence, Token, Dependency
-from ftx.medical import MedicalEntityMention, UMLSConceptLink
+from ft.onto.base_ontology import (
+    EntityMention,
+    Sentence, 
+    Token, 
+    Dependency,
+    NegationContext,
+)
+
+from ftx.onto.clinical import MedicalEntityMention, UMLSConceptLink
 
 __all__ = [
     "SpacyProcessor",
@@ -124,6 +132,12 @@ def set_up_pipe(nlp: Language, configs: Config):
             linker = EntityLinker(resolve_abbreviations=True, name="umls")
             nlp.add_pipe(linker)
 
+        if "neg" in configs.processors:
+            from negspacy.negation import Negex
+
+            negex = Negex(nlp)
+            nlp.add_pipe(negex)
+
     # Remove some components to save some time.
     if configs.lang.startswith("en_core_web_sm"):
         for p in "lemma", "pos", "ner", "dep", "sentence":
@@ -177,6 +191,8 @@ class SpacyBatchedProcessor(FixedSizeBatchProcessor):
 
     - `sentence`: sentence segmentation
 
+    - 'neg': negative context analysis
+
     - `tokenize`: word tokenize
 
     - `pos`: Part-of-speech tagging
@@ -195,6 +211,8 @@ class SpacyBatchedProcessor(FixedSizeBatchProcessor):
 
     - ScispaCy: Fast and Robust Models for Biomedical Natural Language
       Processing.
+
+    - NegspaCy: 
     """
 
     def __init__(self):
@@ -249,6 +267,10 @@ class SpacyBatchedProcessor(FixedSizeBatchProcessor):
                 if "dep" in self.configs.processors:
                     process_parse(result, pack, indexed_tokens)
 
+                # Process negation context
+                if 'neg' in self.configs.processors:
+                    process_negation(result, pack)
+
             # Record medical entity linking results.
             if "umls_link" in self.configs.processors:
                 linker = self.nlp.get_pipe("EntityLinker")  # type: ignore
@@ -283,7 +305,8 @@ class SpacyBatchedProcessor(FixedSizeBatchProcessor):
           will perform tokenization and pos tagging, `ner` will perform
           named entity recognition, `lemma` will perform lemmatization.
           Additional values for this list further includes:
-          `ner` for named entity and `dep` for dependency parsing.
+          `ner` for named entity, `dep` for dependency parsing and 'neg' for
+          negative context analysis.
 
         - `lang`: language model, default is spaCy `en_core_web_sm` model.
           The pipeline support spaCy and ScispaCy models.
@@ -333,6 +356,8 @@ class SpacyProcessor(PackProcessor):
 
     - `sentence`: sentence segmentation
 
+    - 'neg': negative context analysis
+
     - `tokenize`: word tokenize
 
     - `pos`: Part-of-speech tagging
@@ -353,12 +378,16 @@ class SpacyProcessor(PackProcessor):
     biomedical, scientific or clinical text.
     ScispaCy github page: https://github.com/allenai/scispacy/tree/v0.3.0
 
+    NegspaCy is a ...
+
     Citation:
 
     - spaCy: Industrial-strength Natural Language Processing in Python
 
     - ScispaCy: Fast and Robust Models for Biomedical Natural Language
       Processing.
+
+    - NegspaCy: 
 
     """
 
@@ -392,7 +421,8 @@ class SpacyProcessor(PackProcessor):
           named entity recognition, `lemma` will perform lemmatization.
 
           Additional values for this list further includes:
-          `ner` for named entity and `dep` for dependency parsing.
+          `ner` for named entity, `dep` for dependency parsing and 'neg' for
+          negative context analysis.
 
         - `lang`: language model, default is spaCy `en_core_web_sm` model.
           The pipeline support spaCy and ScispaCy models.
@@ -433,6 +463,7 @@ class SpacyProcessor(PackProcessor):
                 "The SpaCy pipeline is not initialized, maybe you "
                 "haven't called the initialization function."
             )
+
         result = self.nlp(doc)
 
         # Record NER results.
@@ -448,6 +479,10 @@ class SpacyProcessor(PackProcessor):
             # Process dependency parse.
             if "dep" in self.configs.processors:
                 process_parse(result, input_pack, indexed_tokens)
+
+            # Process negation context
+            if "neg" in self.configs.processors:
+                process_negation(result, input_pack)
 
         # Record medical entity linking results.
         if "umls_link" in self.configs.processors:
@@ -475,6 +510,8 @@ def set_records(record_meta: Dict[str, Set[str]], configs: Config):
                 record_meta["ft.onto.base_ontology.Token"].add("pos")
             if "lemma" in configs.processors:
                 record_meta["ft.onto.base_ontology.Token"].add("lemma")
+        if "neg" in configs.processors:
+            record_meta["ft.onto.base_ontology.NegationContext"] = {"polarity"}
     if "ner" in configs.processors:
         record_meta["ft.onto.base_ontology.EntityMention"] = {"ner_type"}
     if "dep" in configs.processors:
@@ -595,3 +632,23 @@ def process_umls_entity_linking(linker, result, input_pack: DataPack):
             umls.aliases = cui_entity.aliases
 
             entity.umls_entities.append(umls)
+
+def process_negation(result, inputPack: DataPack):
+    """
+    Perform Negation context analysis and store polarity for each entity. 
+    Polarity: True => Negated context
+    Polarity: False => Positive context
+
+    Args:
+        result: SpaCy results.
+        input_pack: Input data pack.
+
+    Returns:
+
+    """
+
+    entities = result.ents
+
+    for item in entities:
+        negationContext = NegationContext(inputPack, item.start_char, item.end_char)
+        negationContext.polarity = item._.negex
